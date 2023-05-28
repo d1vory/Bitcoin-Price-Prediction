@@ -39,7 +39,7 @@ from models.transformer.my_functrions import make_dataset, get_torch_data_loader
 
 
 class TransAm(pl.LightningModule):
-    def __init__(self, loss_fn, batch_size=32, feature_size=1, decoder_size=16, timestep=10, num_layers=1, dropout=0.1, nhead=2,
+    def __init__(self, loss_fn=None, batch_size=32, feature_size=1, decoder_size=16, timestep=10, num_layers=1, dropout=0.1, nhead=2,
                  attn_type=None, learning_rate=1e-5, weight_decay=1e-6):
         super(TransAm, self).__init__()
 
@@ -50,7 +50,7 @@ class TransAm(pl.LightningModule):
         self.feature_size=feature_size
         self.learning_rate=learning_rate
         self.weight_decay=weight_decay
-        self.loss_fn = loss_fn
+        self.loss_fn = loss_fn or RMSELoss
         print('kw_batch,feature size: ',batch_size,feature_size)
 
         self.src_mask = None
@@ -172,48 +172,53 @@ class TransAm(pl.LightningModule):
         return pred
 
 
-df = pd.read_csv(
-    '../datasets/prepared/log_diffed.csv',
-    parse_dates=True
-)
-target_col = 'log_returns'
-df = df.set_index(['timestamp'])
-df.index = pd.to_datetime(df.index)
+if __name__ == '__main__':
+
+    df = pd.read_csv(
+        '../datasets/prepared/log_diffed.csv',
+        parse_dates=True
+    )
+    target_col = 'log_returns'
+    df = df.set_index(['timestamp'])
+    df.index = pd.to_datetime(df.index)
 
 
-# X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(df, target_col, 0.15)
-# train_loader, val_loader, test_loader, test_loader_one,scaler=kw_dataload(4, X_train, X_val, X_test, y_train, y_val, y_test)
-# feature_size = len(X_train.columns) #input_dim
-#
+    # X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(df, target_col, 0.15)
+    # train_loader, val_loader, test_loader, test_loader_one,scaler=kw_dataload(4, X_train, X_val, X_test, y_train, y_val, y_test)
+    # feature_size = len(X_train.columns) #input_dim
+    #
 
 
 
-Xtrain, Ytrain, Xtest, Ytest, XVal, YVal = make_dataset(df, target_col='log_returns',
-                                                        exclude_cols=['RSI-based MA'], timestep=10, ntest=21)
-train_loader, val_loader, test_loader, test_loader_one = get_torch_data_loaders(
-    Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, 4
-)
-feature_size = Xtrain.shape[-1] #input_dim
+    Xtrain, Ytrain, Xtest, Ytest, XVal, YVal = make_dataset(df, target_col='log_returns',
+                                                            exclude_cols=['RSI-based MA'], timestep=10, ntest=21)
+    train_loader, val_loader, test_loader, test_loader_one = get_torch_data_loaders(
+        Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, 4
+    )
+    feature_size = Xtrain.shape[-1] #input_dim
 
-loss_fn = RMSELoss
+    loss_fn = RMSELoss
 
-trainer = pl.Trainer(
-    callbacks=[],
-    max_epochs=10,
-    logger=False,
-)
+    trainer = pl.Trainer(
+        callbacks=[],
+        max_epochs=10,
+        logger=False,
+    )
 
-model = TransAm(
-    loss_fn=loss_fn,
-    batch_size=4,
-    feature_size=feature_size,
-    num_layers=4,
-    dropout=0.1,
-    nhead=2,
-    attn_type=''
-)
-# with mlflow.start_run(experiment_id=cfg.mlflow.experiment_id,run_name = cfg.mlflow.run_name) as run:
-#     mlflow.log_params(hyperparameters)
-trainer.fit(model, train_loader, val_loader)
+    model = TransAm(
+        loss_fn=loss_fn,
+        batch_size=4,
+        decoder_size=16,
+        timestep=10,
+        feature_size=feature_size,
+        num_layers=4,
+        dropout=0.1,
+        nhead=2,
+        attn_type=''
+    )
+    # with mlflow.start_run(experiment_id=cfg.mlflow.experiment_id,run_name = cfg.mlflow.run_name) as run:
+    #     mlflow.log_params(hyperparameters)
+    trainer.fit(model, train_loader, val_loader)
+
 
 #%%
