@@ -39,8 +39,21 @@ from models.transformer.my_functrions import make_dataset, get_torch_data_loader
 
 
 class TransAm(pl.LightningModule):
-    def __init__(self, loss_fn=None, batch_size=32, feature_size=1, decoder_size=16, timestep=10, num_layers=1, dropout=0.1, nhead=2,
-                 attn_type=None, learning_rate=1e-5, weight_decay=1e-6):
+    def __init__(
+            self,
+            loss_fn=None,
+            batch_size=32,
+            feature_size=1,
+            decoder_size=16,
+            timestep=10,
+            horizon=1,
+            num_layers=1,
+            dropout=0.1,
+            nhead=2,
+            attn_type=None,
+            learning_rate=1e-5,
+            weight_decay=1e-6
+    ):
         super(TransAm, self).__init__()
 
         self.model_type = 'Transformer'
@@ -58,9 +71,10 @@ class TransAm(pl.LightningModule):
         self.encoder_layer = TransformerEncoderLayer(d_model=feature_size, nhead=nhead, dropout=dropout,attn_type=attn_type)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         #self.transformer_encoder = Encoder( input_size=50,heads=2, embedding_dim=feature_size, dropout_rate=dropout, N=num_layers)
-        self.decoder1 = nn.Linear(feature_size, decoder_size)
-        self.decoder2 = nn.Linear(timestep * decoder_size, 1)
+        # self.decoder1 = nn.Linear(feature_size, decoder_size)
+        # self.decoder2 = nn.Linear(timestep * decoder_size, horizon)
 
+        self.decoder1 = nn.Linear(timestep * feature_size, horizon)
         #self.save_hyperparameters("feature_size","batch_size", "learning_rate","weight_decay")   
         self.init_weights()
         self.save_hyperparameters()
@@ -70,8 +84,8 @@ class TransAm(pl.LightningModule):
         self.decoder1.bias.data.zero_()
         self.decoder1.weight.data.uniform_(-initrange, initrange)
 
-        self.decoder2.bias.data.zero_()
-        self.decoder2.weight.data.uniform_(-initrange, initrange)
+        # self.decoder2.bias.data.zero_()
+        # self.decoder2.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src):
 
@@ -82,8 +96,11 @@ class TransAm(pl.LightningModule):
 
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)#, self.src_mask)
-        output = self.decoder1(output)
-        output = self.decoder2(output.view(self.batch_size, -1))
+        # output = self.decoder1(output)
+        # viewed = output.view(src.shape[0], -1)
+        # output = self.decoder2(viewed)
+
+        output = self.decoder1(output.view(src.shape[0], -1))
         #output=F.relu(output)
 
         #add sigmoid function <- output=sigmoid. force output to be 0-1. and
@@ -112,17 +129,6 @@ class TransAm(pl.LightningModule):
 
     def test_dataloader(self):
         pass
-        # OPTIONAL
-        # loading test dataset
-        #return DataLoader(MNIST(os.getcwd(), train=False, download=False, transform=transforms.ToTensor()), batch_size=128,num_workers=32)
-
-    #def RMSE_loss(self, logits, labels):
-    #    return self.loss_fn(logits, labels)
-
-    #def on_train_start(self):
-    #    self.logger.log_hyperparams({"hp/learning_rate": self.learning_rate,
-    #                                           "hp/batch_size": self.batch_size})
-    #    kw_dict=dict()
 
     def training_step(self, train_batch, batch_idx):
         x, y = train_batch
@@ -130,7 +136,7 @@ class TransAm(pl.LightningModule):
         pred = self.forward(x)
         # The actual forward pass is made on the
         #input to get the outcome pred from the model
-        pred = pred.view(-1,1)
+        #pred = pred.view(-1,1)
         loss = self.loss_fn(pred, y)
         print('training_loss', loss)
         self.log('training_loss', loss)
@@ -140,18 +146,18 @@ class TransAm(pl.LightningModule):
         x, y = val_batch
         x = x.view([self.batch_size, -1, self.feature_size])
         pred = self.forward(x)
-        pred = pred.view(-1,1)
+        #pred = pred.view(-1,1)
         loss = self.loss_fn(pred, y)
         self.log('val_loss', loss)
         #print('val_loss:',loss)
         return loss
 
-    def test_step(self, test_batch, batch_idx,batch_size=1):
+    def test_step(self, test_batch, batch_idx, batch_size=1):
         x, y = test_batch
 
         x = x.view([batch_size, -1, self.feature_size])
         pred = self.forward(x)
-        pred = pred.view(-1,1)
+        #pred = pred.view(-1,1)
 
         loss = self.loss_fn(pred, y)
         self.log('Test loss', loss)
@@ -165,7 +171,7 @@ class TransAm(pl.LightningModule):
 
         x = x.view([1, -1, self.feature_size])
         pred = self.forward(x)
-        pred = pred.view(-1,1)
+        #pred = pred.view(-1,1)
         #pred = pred.view(-1,1)
 
 
@@ -175,7 +181,7 @@ class TransAm(pl.LightningModule):
 if __name__ == '__main__':
 
     df = pd.read_csv(
-        '../datasets/prepared/log_diffed.csv',
+        '../datasets/prepared/scaler_test.csv',
         parse_dates=True
     )
     target_col = 'log_returns'
@@ -188,10 +194,10 @@ if __name__ == '__main__':
     # feature_size = len(X_train.columns) #input_dim
     #
 
+    horizon=21
 
-
-    Xtrain, Ytrain, Xtest, Ytest, XVal, YVal = make_dataset(df, target_col='log_returns',
-                                                            exclude_cols=['RSI-based MA'], timestep=10, ntest=21)
+    Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, scaler = make_dataset(
+        df, target_col='log_returns', exclude_cols=[], timestep=10, ntest=21, horizon=horizon)
     train_loader, val_loader, test_loader, test_loader_one = get_torch_data_loaders(
         Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, 4
     )
@@ -201,7 +207,7 @@ if __name__ == '__main__':
 
     trainer = pl.Trainer(
         callbacks=[],
-        max_epochs=10,
+        max_epochs=2,
         logger=False,
     )
 
@@ -210,15 +216,21 @@ if __name__ == '__main__':
         batch_size=4,
         decoder_size=16,
         timestep=10,
+        horizon=horizon,
         feature_size=feature_size,
         num_layers=4,
         dropout=0.1,
         nhead=2,
-        attn_type=''
+        attn_type='fac_random'
     )
     # with mlflow.start_run(experiment_id=cfg.mlflow.experiment_id,run_name = cfg.mlflow.run_name) as run:
     #     mlflow.log_params(hyperparameters)
     trainer.fit(model, train_loader, val_loader)
 
+    # checkpoint_path = 'checkpoints/epoch=26-val_loss=0.579.ckpt'
+    # model = TransAm.load_from_checkpoint(checkpoint_path, map_location=torch.device('cpu'), loss_fn=RMSELoss)
+    # trainer = pl.Trainer()
 
+    # trainer.test(model, test_loader_one)
+    # preds = trainer.predict(model, test_loader_one)
 #%%
