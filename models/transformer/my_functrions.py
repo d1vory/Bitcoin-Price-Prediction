@@ -27,22 +27,16 @@ def divide_dataset_multi_step_prediction(df, timestep, target_col, horizon=1):
     X = []
     Y = []
     for t in range(len(series) - timestep - horizon + 1):
-        x = series[t:t+timestep, :]
-        X.append(x)
-        y = result_series[t+timestep:t+timestep+horizon]
-        Y.append(y)
+        X.append(series[t:t+timestep, :])
+        Y.append(result_series[t+timestep:t+timestep+horizon])
 
     X = np.array(X)
     Y = np.array(Y)
-    last_x = X[-1]
     print("X.shape", X.shape, "Y.shape", Y.shape)
     return X, Y
 
 
 def split_dataset(X, Y, ntest=21):
-    #Xtrain, Ytrain = X[:-ntest, :, :], Y[:-ntest]
-    #Xtest, Ytest = X[-ntest:], Y[-ntest:]
-    #Xtrain, Xtest, Ytrain, Ytest
     Xtrain, Xtest, Ytrain, Ytest = train_test_split(X, Y, test_size=ntest, shuffle=False)
     Xtrain, XVal, Ytrain, YVal = train_test_split(Xtrain, Ytrain, test_size=ntest, shuffle=False)
     return Xtrain, Ytrain, Xtest, Ytest, XVal, YVal
