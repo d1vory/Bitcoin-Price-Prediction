@@ -1,39 +1,16 @@
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.loggers import MLFlowLogger
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from torch.utils.data import DataLoader
 
 import torch
 from torch import nn
-import random
-from typing import Optional, Any, Union, Callable, Tuple
-import mlflow
 
-import torch
-from torch import nn
-from torch import Tensor
-import torch.optim as optim
-import torch.nn.functional as F
-
-#from kw_lstm import LSTMModel
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.loggers import MLFlowLogger
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from kw_transformer_functions import calculate_metrics, RMSELoss, RMSPELoss, plot_dataset, inverse_transform, format_predictions, train_val_test_split , plot_predictions, kw_dataload,final_split,final_dataload
+from kw_transformer_functions import RMSELoss
 
-import math
 import pandas as pd
 import numpy as np
-import time
-from datetime import datetime
-import copy
-import os
 
-from models.transformer.kw_TransformerEncoderLayer import TransformerEncoderLayer
+from models.transformer.transformer_encoder_layer import TransformerEncoderLayer
 from models.transformer.kw_transformer_layers import PositionalEncoding
 from models.transformer.my_functrions import make_dataset, get_torch_data_loaders
 
@@ -64,51 +41,44 @@ class TransAm(pl.LightningModule):
         self.learning_rate=learning_rate
         self.weight_decay=weight_decay
         self.loss_fn = loss_fn or RMSELoss
-        print('kw_batch,feature size: ',batch_size,feature_size)
-
-        self.src_mask = None
-        self.pos_encoder = PositionalEncoding(feature_size)
+        self.source_masking = None
+        self.positional_encoder = PositionalEncoding(feature_size)
         self.encoder_layer = TransformerEncoderLayer(d_model=feature_size, nhead=nhead, dropout=dropout,attn_type=attn_type)
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
-        #self.transformer_encoder = Encoder( input_size=50,heads=2, embedding_dim=feature_size, dropout_rate=dropout, N=num_layers)
+        self.transformer_encoder = nn.TransformerEncoder(
+            TransformerEncoderLayer(d_model=feature_size, nhead=nhead, dropout=dropout,attn_type=attn_type),
+            num_layers=num_layers
+        )
         # self.decoder1 = nn.Linear(feature_size, decoder_size)
         # self.decoder2 = nn.Linear(timestep * decoder_size, horizon)
-
         self.decoder1 = nn.Linear(timestep * feature_size, horizon)
-        #self.save_hyperparameters("feature_size","batch_size", "learning_rate","weight_decay")   
-        self.init_weights()
-        self.save_hyperparameters()
 
-    def init_weights(self):
         initrange = 0.1
         self.decoder1.bias.data.zero_()
         self.decoder1.weight.data.uniform_(-initrange, initrange)
-
         # self.decoder2.bias.data.zero_()
         # self.decoder2.weight.data.uniform_(-initrange, initrange)
+        self.save_hyperparameters()
 
     def forward(self, src):
+        if self.source_masking is None or self.source_masking.size(0) != len(src):
+            self.source_masking = self._get_mask(len(src)).to(src.device)
 
-        if self.src_mask is None or self.src_mask.size(0) != len(src):
-            device = src.device
-            mask = self._generate_square_subsequent_mask(len(src)).to(device)
-            self.src_mask = mask
-
-        src = self.pos_encoder(src)
-        output = self.transformer_encoder(src, self.src_mask)#, self.src_mask)
+        src = self.positional_encoder(src)
+        output = self.transformer_encoder(src, self.source_masking)
         # output = self.decoder1(output)
         # viewed = output.view(src.shape[0], -1)
         # output = self.decoder2(viewed)
 
-        output = self.decoder1(output.view(src.shape[0], -1))
-        #output=F.relu(output)
-
-        #add sigmoid function <- output=sigmoid. force output to be 0-1. and
+        viewed = output.view(src.shape[0], -1)
+        output = self.decoder1(viewed)
         return output
 
-    def _generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    @staticmethod
+    def _get_mask(size):
+        mask = (torch.triu(torch.ones(size, size)) == 1).transpose(0, 1)
+        mask = mask.float()
+        mask = mask.masked_fill(mask == 0, float('-inf'))
+        mask = mask.masked_fill(mask == 1, float(0.0))
         return mask
 
     def configure_optimizers(self):
@@ -117,14 +87,9 @@ class TransAm(pl.LightningModule):
 
 
     def train_dataloader(self):
-        # REQUIRED
-        # This is an essential function. Needs to be included in the code
-
         return DataLoader(self.train_set, batch_size=128, num_workers=32)
 
     def val_dataloader(self):
-        # OPTIONAL
-        #loading validation dataset
         return DataLoader(self.val_set, batch_size=128, num_workers=32)
 
     def test_dataloader(self):
@@ -132,49 +97,28 @@ class TransAm(pl.LightningModule):
 
     def training_step(self, train_batch, batch_idx):
         x, y = train_batch
-        x = x.view([self.batch_size, -1, self.feature_size])
-        pred = self.forward(x)
-        # The actual forward pass is made on the
-        #input to get the outcome pred from the model
-        #pred = pred.view(-1,1)
+        pred = self.forward(x.view([self.batch_size, -1, self.feature_size]))
         loss = self.loss_fn(pred, y)
-        print('training_loss', loss)
         self.log('training_loss', loss)
         return loss
 
     def validation_step(self, val_batch, batch_idx):
         x, y = val_batch
-        x = x.view([self.batch_size, -1, self.feature_size])
-        pred = self.forward(x)
-        #pred = pred.view(-1,1)
+        pred = self.forward(x.view([self.batch_size, -1, self.feature_size]))
         loss = self.loss_fn(pred, y)
         self.log('val_loss', loss)
-        #print('val_loss:',loss)
         return loss
 
     def test_step(self, test_batch, batch_idx, batch_size=1):
         x, y = test_batch
-
-        x = x.view([batch_size, -1, self.feature_size])
-        pred = self.forward(x)
-        #pred = pred.view(-1,1)
-
+        pred = self.forward(x.view([batch_size, -1, self.feature_size]))
         loss = self.loss_fn(pred, y)
         self.log('Test loss', loss)
-
         return loss
-
-
-    #    print(len(losses)) ## This will be same as number of validation batches
     def predict_step(self, batch, batch_idx):
         x, y = batch
-
         x = x.view([1, -1, self.feature_size])
-        pred = self.forward(x)
-        #pred = pred.view(-1,1)
-        #pred = pred.view(-1,1)
-
-
+        pred = self.forward(x.view([1, -1, self.feature_size]))
         return pred
 
 
@@ -213,7 +157,7 @@ if __name__ == '__main__':
 
     model = TransAm(
         loss_fn=loss_fn,
-        batch_size=4,
+        batch_size=16,
         decoder_size=16,
         timestep=10,
         horizon=horizon,

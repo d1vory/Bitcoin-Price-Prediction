@@ -37,7 +37,7 @@ from ray.train.lightning import (
 )
 
 
-from models.transformer.kw_transformer import TransAm
+from models.transformer.transformer_main import TransAm
 from kw_transformer_functions import RMSELoss
 from models.transformer.my_functrions import make_dataset, get_torch_data_loaders
 from pytorch_lightning.callbacks import TQDMProgressBar

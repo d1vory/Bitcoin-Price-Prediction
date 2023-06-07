@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.init import constant_, xavier_normal_, xavier_uniform_
-from kw_multi_head_attention_forward import multi_head_attention_forward
+from attention_functions import multi_head_attention_forward
 
 class MultiheadAttention(nn.Module):
     r"""Allows the model to jointly attend to information
