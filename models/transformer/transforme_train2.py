@@ -37,7 +37,7 @@ from ray.train.lightning import (
 )
 
 
-from models.transformer.transformer_main import TransAm
+from models.transformer.transformer_main import MyTransformer
 from models.transformer.my_functrions import make_dataset, get_torch_data_loaders, RMSELoss
 
 torch.manual_seed(0)
@@ -110,7 +110,7 @@ def train_transformer(config):
 
     loss_fn = RMSELoss
 
-    model = TransAm(
+    model = MyTransformer(
         loss_fn=loss_fn,
         batch_size=config['batch_size'],
         decoder_size=decoder_size,

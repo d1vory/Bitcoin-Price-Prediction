@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import TQDMProgressBar
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 from models.transformer.my_functrions import make_dataset, get_torch_data_loaders, RMSELoss
-from models.transformer.transformer_main import TransAm
+from models.transformer.transformer_main import MyTransformer
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -55,7 +55,7 @@ train_loader, val_loader, test_loader, test_loader_one = get_torch_data_loaders(
 
 
 
-model = TransAm.load_from_checkpoint(checkpoint_path, map_location=torch.device('cpu'), loss_fn=RMSELoss)
+model = MyTransformer.load_from_checkpoint(checkpoint_path, map_location=torch.device('cpu'), loss_fn=RMSELoss)
 
 
 early_stop_callback = EarlyStopping(monitor="val_loss", patience=patience, verbose=False, mode="min")

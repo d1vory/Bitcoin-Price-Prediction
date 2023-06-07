@@ -10,11 +10,11 @@ import pandas as pd
 import numpy as np
 
 from models.transformer.transformer_encoder_layer import TransformerEncoderLayer
-from models.transformer.kw_transformer_layers import PositionalEncoding
+from models.transformer.positional_encoding import PositionalEncoding
 from models.transformer.my_functrions import make_dataset, get_torch_data_loaders, RMSELoss
 
 
-class TransAm(pl.LightningModule):
+class MyTransformer(pl.LightningModule):
     def __init__(
             self,
             loss_fn=None,
@@ -30,7 +30,7 @@ class TransAm(pl.LightningModule):
             learning_rate=1e-5,
             weight_decay=1e-6
     ):
-        super(TransAm, self).__init__()
+        super(MyTransformer, self).__init__()
 
         self.model_type = 'Transformer'
         self.attn_type=attn_type
@@ -150,7 +150,7 @@ if __name__ == '__main__':
         logger=False,
     )
 
-    model = TransAm(
+    model = MyTransformer(
         loss_fn=loss_fn,
         batch_size=batch_size,
         decoder_size=16,
@@ -162,13 +162,8 @@ if __name__ == '__main__':
         nhead=2,
         attn_type='fac_random'
     )
-    # with mlflow.start_run(experiment_id=cfg.mlflow.experiment_id,run_name = cfg.mlflow.run_name) as run:
-    #     mlflow.log_params(hyperparameters)
     trainer.fit(model, train_loader, val_loader)
 
-    # checkpoint_path = 'checkpoints/epoch=26-val_loss=0.579.ckpt'
-    # model = TransAm.load_from_checkpoint(checkpoint_path, map_location=torch.device('cpu'), loss_fn=RMSELoss)
-    # trainer = pl.Trainer()
 
     # trainer.test(model, test_loader_one)
     # preds = trainer.predict(model, test_loader_one)
