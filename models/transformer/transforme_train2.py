@@ -58,6 +58,14 @@ df.index = pd.to_datetime(df.index)
 exclude_cols = ['log_close', 'Close']
 
 
+val_df = pd.read_csv(
+    '../datasets/prepared/eth/ta_corr_01_fd.csv',
+    parse_dates=True
+)
+val_df = val_df.set_index(['timestamp'])
+val_df.index = pd.to_datetime(val_df.index)
+
+
 # config = {
 #     'batch_size': tune.grid_search([4]),
 #     'num_layers': tune.grid_search([4]),
@@ -76,23 +84,41 @@ exclude_cols = ['log_close', 'Close']
 #     'model_checkpoint_outputdir': 'multioutput/ta_corr_01_fd3'
 # }
 
+# config = {
+#     'batch_size': tune.choice([4, 8]),
+#     'num_layers': tune.choice([4, 5, 6]),
+#     'dropout': tune.choice([0.2]),
+#     'nhead': tune.choice([2, 4, 6]),
+#     #'attn_type': tune.grid_search([ 'dense', '', 'rv_mix']),
+#     #'attn_type': tune.grid_search(['', 'fac_dense', 'dense', 'rv_mix', 'dv_mix']),
+#     #'attn_type': tune.choice(['fac_dense', 'dense', 'dv_mix']),
+#     'attn_type': tune.choice(['fac_dense', ]),
+#     'learning_rate': tune.choice([1e-5]),
+#     'weight_decay': tune.choice([1e-6]),
+#     'patience': tune.choice([50]),
+#     'n_epochs': tune.choice([100]),
+#     'timestep': tune.choice([40, 50]),
+#     'horizon': tune.choice([14]),
+#     'ntest': tune.choice([42]),
+#     'model_checkpoint_outputdir': 'multioutput/ta_corr_01_fd5'
+# }
 config = {
-    'batch_size': tune.choice([4, 8]),
-    'num_layers': tune.choice([4, 5, 6]),
+    'batch_size': tune.choice([2]),
+    'num_layers': tune.choice([4]),
     'dropout': tune.choice([0.2]),
-    'nhead': tune.choice([2, 4, 6]),
+    'nhead': tune.choice([2]),
     #'attn_type': tune.grid_search([ 'dense', '', 'rv_mix']),
     #'attn_type': tune.grid_search(['', 'fac_dense', 'dense', 'rv_mix', 'dv_mix']),
     #'attn_type': tune.choice(['fac_dense', 'dense', 'dv_mix']),
     'attn_type': tune.choice(['fac_dense', ]),
-    'learning_rate': tune.choice([1e-5]),
+    'learning_rate': tune.choice([1e-6]),
     'weight_decay': tune.choice([1e-6]),
-    'patience': tune.choice([50]),
-    'n_epochs': tune.choice([100]),
-    'timestep': tune.choice([40, 50]),
+    'patience': tune.choice([100]),
+    'n_epochs': tune.choice([300]),
+    'timestep': tune.choice([26]),
     'horizon': tune.choice([14]),
     'ntest': tune.choice([42]),
-    'model_checkpoint_outputdir': 'multioutput/ta_corr_01_fd5'
+    'model_checkpoint_outputdir': 'multioutput/eth_as_val'
 }
 
 
@@ -113,6 +139,14 @@ def train_transformer(config):
     train_loader, val_loader, test_loader, test_loader_one = get_torch_data_loaders(
         Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, config['batch_size']
     )
+
+    XVal, YVal, _, _, _, _, _ = make_dataset(
+        val_df, target_col='log_returns', exclude_cols=exclude_cols, timestep=timestep, ntest=ntest, horizon=horizon
+    )
+    val_loader, _, _, _ = get_torch_data_loaders(
+        Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, config['batch_size']
+    )
+
     feature_size = Xtrain.shape[-1] #input_dim
 
     loss_fn = RMSELoss
@@ -178,12 +212,11 @@ def train_transformer(config):
 algo = OptunaSearch()
 algo = ConcurrencyLimiter(algo, max_concurrent=3)
 scheduler = AsyncHyperBandScheduler()
-num_samples = 124
+num_samples = 1
 training_iterations = 10
 
 
 context = ray.init()
-print(context.dashboard_url)
 
 #trainable = tune.with_resources(
 trainable = tune.with_parameters(
@@ -198,7 +231,7 @@ trainable = tune.with_parameters(
 analysis = tune.run(
     trainable,
     resources_per_trial={
-        "cpu": 4,
+        "cpu": 12,
         #"gpu": 1,
         #'accelerator_type': NVIDIA_TESLA_A100
     },
