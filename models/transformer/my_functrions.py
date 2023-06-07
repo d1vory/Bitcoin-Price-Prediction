@@ -73,15 +73,14 @@ def get_torch_data_loaders(Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, batch_size)
     test_loader_one = DataLoader(test, batch_size=1, shuffle=False, drop_last=True)
     return train_loader, val_loader, test_loader, test_loader_one
 
-def test_predictions_multistep(preds, real, scaler, unscale=False, last_train=None, apply_func_to_preds=None, concat=False, step=1
-                               ):
+def test_predictions_multistep(
+        preds, real, scaler, unscale=False, last_train=None,
+        apply_func_to_preds=None, concat=False, step=1
+):
     if concat:
         predictions = np.concatenate(preds)
     else:
         predictions = preds
-    # if unscale:
-    #     predictions = scaler.inverse_transform(predictions)
-    #     real = scaler.inverse_transform(real)
     for i in range(0, predictions.shape[0] - 1, step):
         if unscale:
             unscaled_y_test = scaler.inverse_transform(real[i].reshape(-1, 1)).flatten()
@@ -94,8 +93,16 @@ def test_predictions_multistep(preds, real, scaler, unscale=False, last_train=No
             #print(prediction)
             kek = [np.exp(last_train), *np.exp(last_train +  np.cumsum(unscaled_prediction))]
 
-            df = pd.DataFrame(data={"value": real_prices, "prediction": kek})
+            df = pd.DataFrame(data={"real price": real_prices, "prediction": kek})
         else:
-            df = pd.DataFrame(data={"value": real[i], "prediction": predictions[i]})
+            df = pd.DataFrame(data={"real price": real[i], "prediction": predictions[i]})
         #pd.DataFrame(data={"value": real[i], "prediction": predictions[i] * 10}).plot()
-        df.plot()
+        df.plot(title=f'Experiment {i}')
+
+
+def RMSELoss(yhat,y):
+    return torch.sqrt(torch.mean((yhat-y)**2))
+
+
+def RMSPELoss(y_pred, y_true):
+    return torch.sqrt(torch.mean( ((y_true - y_pred) / y_true) ** 2 ))

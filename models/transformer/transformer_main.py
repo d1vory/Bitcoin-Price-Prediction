@@ -5,14 +5,13 @@ import torch
 from torch import nn
 
 import pytorch_lightning as pl
-from kw_transformer_functions import RMSELoss
 
 import pandas as pd
 import numpy as np
 
 from models.transformer.transformer_encoder_layer import TransformerEncoderLayer
 from models.transformer.kw_transformer_layers import PositionalEncoding
-from models.transformer.my_functrions import make_dataset, get_torch_data_loaders
+from models.transformer.my_functrions import make_dataset, get_torch_data_loaders, RMSELoss
 
 
 class TransAm(pl.LightningModule):
@@ -132,12 +131,6 @@ if __name__ == '__main__':
     target_col = 'log_returns'
     df = df.set_index(['timestamp'])
     df.index = pd.to_datetime(df.index)
-
-
-    # X_train, X_val, X_test, y_train, y_val, y_test = train_val_test_split(df, target_col, 0.15)
-    # train_loader, val_loader, test_loader, test_loader_one,scaler=kw_dataload(4, X_train, X_val, X_test, y_train, y_val, y_test)
-    # feature_size = len(X_train.columns) #input_dim
-    #
 
     horizon=21
     batch_size=16

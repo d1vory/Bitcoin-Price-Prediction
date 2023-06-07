@@ -1,255 +1,42 @@
-from typing import Callable, List, Optional, Tuple
-import math
+from typing import Optional, Tuple
 import warnings
 from torch import Tensor
 import torch
-from torch import _VF
-from torch._C import _infer_size, _add_docstr
-from torch._torch_docs import reproducibility_notes, tf32_notes
-from typing import TYPE_CHECKING
-from torch import nn
+
 from torch.overrides import has_torch_function, handle_torch_function
-from torch.nn.functional import _in_projection_packed, linear, dropout, softmax, _in_projection, pad
+from torch.nn.functional import _in_projection_packed, linear, _in_projection, pad, \
+    _scaled_dot_product_attention
 
-
-class DVMixtureSynthesizers(nn.Module):
-    def __init__(self, in_dims, sentence_length):
-        super(DVMixtureSynthesizers, self).__init__()
-        # Dense + Vanilla
-
-        # Dense
-        self.w_1 = nn.Linear(in_dims, 64)
-        self.w_2 = nn.Linear(64, sentence_length)
-        self.relu = nn.ReLU()
-
-        # Vanilla
-        self.query_fc = nn.Linear(in_dims, in_dims)
-        self.key_fc = nn.Linear(in_dims, in_dims)
-
-        self.value_fc = nn.Linear(in_dims, in_dims)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, query,key,value):
-        dense_attn=self.w_1(query)
-        dense_attn=self.relu(dense_attn)
-        dense_attn=self.w_2(dense_attn)
-        query = self.query_fc(query)
-        key = self.key_fc(key).permute(0, 2, 1)
-
-        vanilla_energy = torch.bmm(query, key)
-        energy = dense_attn + vanilla_energy
-        attention = self.softmax(energy)
-        out = torch.bmm(attention, value)
-
-        return out, attention
-
-class RVMixtureSynthesizers(nn.Module):
-    def __init__(self, in_dims, sentence_length):
-        super(RVMixtureSynthesizers, self).__init__()
-        # Random + Vanilla
-
-        # Random
-        self.attention = nn.Parameter(torch.empty(1, sentence_length, sentence_length), requires_grad=True)
-        nn.init.xavier_uniform_(self.attention)
-
-        # Vanilla
-        self.query_fc = nn.Linear(in_dims, in_dims)
-        self.key_fc = nn.Linear(in_dims, in_dims)
-
-        self.value_fc = nn.Linear(in_dims, in_dims)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, query,key,value):
-        query = self.query_fc(query)
-        key = self.key_fc(key).permute(0, 2, 1)
-
-        vanilla_energy = torch.bmm(query, key)
-        energy = self.attention + vanilla_energy
-        attention = self.softmax(energy)
-        out = torch.bmm(attention, value)
-
-        return out, attention
-
-
-
-
-class FactorizedDenseAttention(nn.Module):
-    def __init__(self, sentence_length, in_dims,  attn_dropout = 0.1):
-        #d_hid = 8*(128/8)/2
-        super(FactorizedDenseAttention, self).__init__()
-        self.f =1
-        self.sentence_length = sentence_length
-        self.f_a = nn.Linear(in_dims, self.f)
-        self.f_b = nn.Linear(in_dims, sentence_length//self.f)
-
-        #self.a = 1
-        #self.b = sentence_length // self.a
-        #self.a_proj = nn.Linear(in_dims, self.a).cpu()
-        #self.b_proj = nn.Linear(in_dims, self.b).cpu()
-
-        self.dropout = nn.Dropout(attn_dropout)
-
-    def forward(self, q,  v, sentence_length, len_q,mask=None, factorize=False):
-
-        h_a = torch.repeat_interleave(self.f_a(q), self.sentence_length//self.f, -1)[:,:,:len_q]
-        h_b = torch.repeat_interleave(self.f_b(q), self.f, -1)[:,:,:len_q]
-
-        #h_a = self.f_a(q).repeat([1, 1, sentence_length//self.f])[:,:,:len_q].cpu()
-        #h_b = self.f_b(q).repeat([1, 1, self.f])[:,:,:len_q].cpu()
-        #dense_attn = torch.matmul(h_a, h_b.transpose(2, 2))
-        #dense_attn = h_a * h_b
-        dense_attn = torch.matmul(h_a , h_b.transpose(2, 2))
-
-        if mask is not None:
-            dense_attn = dense_attn.masked_fill(mask == 0, -1e9)
-
-        dense_attn = self.dropout(softmax(dense_attn, dim=-1))
-
-        output = torch.bmm(dense_attn, v)
-
-        return output, dense_attn
-
-
-class FactorizedRandomAttention(nn.Module):
-
-    def __init__( self,  batch_size, n_head, max_seq_len, attn_dropout = 0.1):
-        super(FactorizedRandomAttention, self).__init__()
-
-        self.random_attn_1 = torch.randn(batch_size, max_seq_len, 8, requires_grad = True)
-        self.random_attn_2 = torch.randn(batch_size, 8, max_seq_len, requires_grad = True)
-        self.dropout = nn.Dropout(attn_dropout)
-    def forward(self, v, len_q, mask=None, factorize=False):
-        # b x n x max_len x max_len -> b x n x lq x lq #[:,:,:len_q,:len_q]
-        random_attn = torch.matmul(self.random_attn_1, self.random_attn_2)[:mask.shape[0],:len_q,:len_q]
-
-        if mask is not None:
-            random_attn = random_attn.masked_fill(mask == 0, -1e9)
-
-        random_attn = self.dropout(softmax(random_attn, dim=-1))
-        output = torch.matmul(random_attn, v)
-
-        return output, random_attn
-
-class RandomAttention(nn.Module):
-    def __init__(self, batch_size, n_head, sentence_length, attn_dropout = 0.1):
-        super(RandomAttention, self).__init__()
-  
-        self.random_attn = torch.randn(batch_size, sentence_length, sentence_length, requires_grad = False)
-     
-        self.dropout = nn.Dropout(attn_dropout)
-
-    def forward(self, v, len_q, mask=None):
-
-        # b x n x max_len x max_len -> b x n x lq x lq
-        random_attn = self.random_attn[:mask.shape[0],:len_q,:len_q]
-
-
-        if mask is not None:
-            random_attn = random_attn.masked_fill(mask == 0, -1e9)
-
-        random_attn = self.dropout(softmax(random_attn, dim=-1))
-        output = torch.matmul(random_attn, v)
-
-        return output, random_attn
-
-class DenseAttention(nn.Module):
-    def __init__(self, in_dims, sentence_length ,attn_dropout = 0.1):
-        #d_hid = 8*(128/8)/2
-        super(DenseAttention, self).__init__()
-        self.w_1 = nn.Linear(in_dims, 64)
-        self.w_2 = nn.Linear(64, sentence_length)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(attn_dropout)
-
-    def forward(self, q, v, len_q,mask=None):
-
-        # b x n x lq x dq -> b x n x lq x lq #
-        dense_attn = self.w_2(self.relu(self.w_1(q)))[:,:,:len_q]
-        #print(dense_attn.shape)
-        #dense_attn=self.w_1(q).cpu()
-        #dense_attn=self.relu(dense_attn).cpu()
-        #dense_attn=self.w_2(dense_attn).cpu()
-       
-        if mask is not None:
-            dense_attn = dense_attn.masked_fill(mask == 0, -1e9)
-
-        dense_attn = self.dropout(softmax(dense_attn, dim=-1))
-        output = torch.bmm(dense_attn, v)
-        
-        return output, dense_attn
-
-
-
-    
-def scaled_dot_product_attention(
-    q: Tensor,
-    k: Tensor,
-    v: Tensor,
-    attn_mask: Optional[Tensor] = None,
-    dropout_p: float = 0.0,
-) -> Tuple[Tensor, Tensor]:
-    r"""
-    Computes scaled dot product attention on query, key and value tensors, using
-    an optional attention mask if passed, and applying dropout if a probability
-    greater than 0.0 is specified.
-    Returns a tensor pair containing attended values and attention weights.
-    Args:
-        q, k, v: query, key and value tensors. See Shape section for shape details.
-        attn_mask: optional tensor containing mask values to be added to calculated
-            attention. May be 2D or 3D; see Shape section for details.
-        dropout_p: dropout probability. If greater than 0.0, dropout is applied.
-    Shape:
-        - q: :math:`(B, Nt, E)` where B is batch size, Nt is the target sequence length,
-            and E is embedding dimension.
-        - key: :math:`(B, Ns, E)` where B is batch size, Ns is the source sequence length,
-            and E is embedding dimension.
-        - value: :math:`(B, Ns, E)` where B is batch size, Ns is the source sequence length,
-            and E is embedding dimension.
-        - attn_mask: either a 3D tensor of shape :math:`(B, Nt, Ns)` or a 2D tensor of
-            shape :math:`(Nt, Ns)`.
-        - Output: attention values have shape :math:`(B, Nt, E)`; attention weights
-            have shape :math:`(B, Nt, Ns)`
-    """
-    B, Nt, E = q.shape
-    q = q / math.sqrt(E)
-    # (B, Nt, E) x (B, E, Ns) -> (B, Nt, Ns)
-    attn = torch.bmm(q, k.transpose(-2, -1))
-    if attn_mask is not None:
-        attn += attn_mask
-    attn = softmax(attn, dim=-1)
-    if dropout_p > 0.0:
-        attn = dropout(attn, p=dropout_p)
-    # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
-    output = torch.bmm(attn, v)
-    return output, attn
+from models.transformer.attentions import DenseVanillaAttention, RandomVanillaAttention, FactorizedDenseAttention, \
+    FactorizedRandomAttention, RandomAttention, DenseAttention
 
 
 def multi_head_attention_forward(
 
-    query: Tensor,
-    key: Tensor,
-    value: Tensor,
-    embed_dim_to_check: int,
-    num_heads: int,
-    in_proj_weight: Tensor,
-    in_proj_bias: Optional[Tensor],
-    bias_k: Optional[Tensor],
-    bias_v: Optional[Tensor],
-    add_zero_attn: bool,
-    dropout_p: float,
-    out_proj_weight: Tensor,
-    out_proj_bias: Optional[Tensor],
-    training: bool = True,
-    key_padding_mask: Optional[Tensor] = None,
-    need_weights: bool = True,
-    attn_mask: Optional[Tensor] = None,
-    use_separate_proj_weight: bool = False,
-    q_proj_weight: Optional[Tensor] = None,
-    k_proj_weight: Optional[Tensor] = None,
-    v_proj_weight: Optional[Tensor] = None,
-    static_k: Optional[Tensor] = None,
-    static_v: Optional[Tensor] = None,
-    attn_type: str=None
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        embed_dim_to_check: int,
+        num_heads: int,
+        in_proj_weight: Tensor,
+        in_proj_bias: Optional[Tensor],
+        bias_k: Optional[Tensor],
+        bias_v: Optional[Tensor],
+        add_zero_attn: bool,
+        dropout_p: float,
+        out_proj_weight: Tensor,
+        out_proj_bias: Optional[Tensor],
+        training: bool = True,
+        key_padding_mask: Optional[Tensor] = None,
+        need_weights: bool = True,
+        attn_mask: Optional[Tensor] = None,
+        use_separate_proj_weight: bool = False,
+        q_proj_weight: Optional[Tensor] = None,
+        k_proj_weight: Optional[Tensor] = None,
+        v_proj_weight: Optional[Tensor] = None,
+        static_k: Optional[Tensor] = None,
+        static_v: Optional[Tensor] = None,
+        attn_type: str = None
 ) -> Tuple[Tensor, Optional[Tensor]]:
     """
     Args:
@@ -382,18 +169,21 @@ def multi_head_attention_forward(
         if attn_mask.dim() == 2:
             correct_2d_size = (tgt_len, src_len)
             if attn_mask.shape != correct_2d_size:
-                raise RuntimeError(f"The shape of the 2D attn_mask is {attn_mask.shape}, but should be {correct_2d_size}.")
+                raise RuntimeError(
+                    f"The shape of the 2D attn_mask is {attn_mask.shape}, but should be {correct_2d_size}.")
             attn_mask = attn_mask.unsqueeze(0)
         elif attn_mask.dim() == 3:
             correct_3d_size = (bsz * num_heads, tgt_len, src_len)
             if attn_mask.shape != correct_3d_size:
-                raise RuntimeError(f"The shape of the 3D attn_mask is {attn_mask.shape}, but should be {correct_3d_size}.")
+                raise RuntimeError(
+                    f"The shape of the 3D attn_mask is {attn_mask.shape}, but should be {correct_3d_size}.")
         else:
             raise RuntimeError(f"attn_mask's dimension {attn_mask.dim()} is not supported")
 
     # prep key padding mask
     if key_padding_mask is not None and key_padding_mask.dtype == torch.uint8:
-        warnings.warn("Byte tensor for key_padding_mask in nn.MultiheadAttention is deprecated. Use bool tensor instead.")
+        warnings.warn(
+            "Byte tensor for key_padding_mask in nn.MultiheadAttention is deprecated. Use bool tensor instead.")
         key_padding_mask = key_padding_mask.to(torch.bool)
 
     # add bias along batch dimension (currently second)
@@ -450,7 +240,7 @@ def multi_head_attention_forward(
     if key_padding_mask is not None:
         assert key_padding_mask.shape == (bsz, src_len), \
             f"expecting key_padding_mask shape of {(bsz, src_len)}, but got {key_padding_mask.shape}"
-        key_padding_mask = key_padding_mask.view(bsz, 1, 1, src_len).   \
+        key_padding_mask = key_padding_mask.view(bsz, 1, 1, src_len). \
             expand(-1, num_heads, -1, -1).reshape(bsz * num_heads, 1, src_len)
         if attn_mask is None:
             attn_mask = key_padding_mask
@@ -473,37 +263,34 @@ def multi_head_attention_forward(
     # (deep breath) calculate attention and out projection
     #
 
-    
-    if attn_type=="dense":
-        dense_attn=DenseAttention(in_dims=head_dim,sentence_length=src_len,attn_dropout=dropout_p)
-        attn_output, attn_output_weights = dense_attn(q, v, len_q=tgt_len,mask=attn_mask)
-        
-    elif attn_type=="random":
-        random_attn=RandomAttention(batch_size=bsz, n_head=num_heads, sentence_length=src_len, attn_dropout = dropout_p)
-        attn_output, attn_output_weights=random_attn(v, len_q=tgt_len, mask=attn_mask)
+    if attn_type == "dense":
+        dense_attn = DenseAttention(in_dims=head_dim, sentence_length=src_len, attn_dropout=dropout_p)
+        attn_output, attn_output_weights = dense_attn(q, v, len_q=tgt_len, mask=attn_mask)
 
-    elif attn_type=="fac_random":
-        fac_random=FactorizedRandomAttention(batch_size=head_dim,n_head=num_heads,max_seq_len=src_len,attn_dropout=dropout_p)
-        attn_output, attn_output_weights = fac_random(v, len_q=tgt_len,mask=attn_mask) 
-        
-    elif attn_type=="fac_dense":
-        fac_dense=FactorizedDenseAttention(in_dims=head_dim,sentence_length=src_len,attn_dropout=dropout_p)
-        attn_output, attn_output_weights = fac_dense(q,v, sentence_length=src_len,len_q=tgt_len,mask=attn_mask) 
-        
-    elif attn_type=="rv_mix":
-        RV_mix = RVMixtureSynthesizers(in_dims=head_dim,sentence_length=src_len)
-        attn_output, attn_output_weights = RV_mix(q,k,v) 
+    elif attn_type == "random":
+        random_attn = RandomAttention(batch_size=bsz, n_head=num_heads, sentence_length=src_len, attn_dropout=dropout_p)
+        attn_output, attn_output_weights = random_attn(v, len_q=tgt_len, mask=attn_mask)
 
-    elif attn_type=="dv_mix":
-        DV_mix = DVMixtureSynthesizers(in_dims=head_dim,sentence_length=src_len)
-        attn_output, attn_output_weights = DV_mix(q,k,v) 
-             
+    elif attn_type == "fac_random":
+        fac_random = FactorizedRandomAttention(batch_size=head_dim, n_head=num_heads, max_seq_len=src_len,
+                                               attn_dropout=dropout_p)
+        attn_output, attn_output_weights = fac_random(v, len_q=tgt_len, mask=attn_mask)
+
+    elif attn_type == "fac_dense":
+        fac_dense = FactorizedDenseAttention(in_dims=head_dim, sentence_length=src_len, attn_dropout=dropout_p)
+        attn_output, attn_output_weights = fac_dense(q, v, sentence_length=src_len, len_q=tgt_len, mask=attn_mask)
+
+    elif attn_type == "rv_mix":
+        RV_mix = RandomVanillaAttention(in_dims=head_dim, sentence_length=src_len)
+        attn_output, attn_output_weights = RV_mix(q, k, v)
+
+    elif attn_type == "dv_mix":
+        DV_mix = DenseVanillaAttention(in_dims=head_dim, sentence_length=src_len)
+        attn_output, attn_output_weights = DV_mix(q, k, v)
+
     else:
-        attn_output, attn_output_weights = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p)
+        attn_output, attn_output_weights = _scaled_dot_product_attention(q, k, v, attn_mask, dropout_p)
 
-
-
-    
     attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
     attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
 
