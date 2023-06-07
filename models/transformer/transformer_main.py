@@ -104,7 +104,8 @@ class TransAm(pl.LightningModule):
 
     def validation_step(self, val_batch, batch_idx):
         x, y = val_batch
-        pred = self.forward(x.view([self.batch_size, -1, self.feature_size]))
+        kek = x.view([self.batch_size, -1, self.feature_size])
+        pred = self.forward(kek)
         loss = self.loss_fn(pred, y)
         self.log('val_loss', loss)
         return loss
@@ -139,11 +140,12 @@ if __name__ == '__main__':
     #
 
     horizon=21
+    batch_size=16
 
     Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, scaler = make_dataset(
         df, target_col='log_returns', exclude_cols=[], timestep=10, ntest=21, horizon=horizon)
     train_loader, val_loader, test_loader, test_loader_one = get_torch_data_loaders(
-        Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, 4
+        Xtrain, Ytrain, Xtest, Ytest, XVal, YVal, batch_size
     )
     feature_size = Xtrain.shape[-1] #input_dim
 
@@ -157,7 +159,7 @@ if __name__ == '__main__':
 
     model = TransAm(
         loss_fn=loss_fn,
-        batch_size=16,
+        batch_size=batch_size,
         decoder_size=16,
         timestep=10,
         horizon=horizon,
